@@ -136,6 +136,16 @@ let recognition = null;
 let activeStream = null;
 let flushTimer = null;
 
+// BUG 6: Double startRecognition guard
+let recognitionStarting = false;
+
+// BUG 3: Generation counter for race condition
+let interimGeneration = 0;
+
+// BUG 5: Finalized lines arrays
+let finalOriginalLines = [];
+let finalTranslatedLines = [];
+
 const startBtn = document.getElementById('startBtn');
 const statusEl = document.getElementById('status');
 const originalEl = document.getElementById('original');
@@ -155,6 +165,13 @@ async function loadDevices() {
   const devices = await navigator.mediaDevices.enumerateDevices();
   const inputs = devices.filter(d => d.kind === 'audioinput');
   micSelect.innerHTML = '';
+
+  // BUG 7: If no inputs found, show error
+  if (inputs.length === 0) {
+    errorEl.textContent = 'No microphone found. Please connect a microphone and reload.';
+    return;
+  }
+
   inputs.forEach(d => {
     const opt = document.createElement('option');
     opt.value = d.deviceId;
@@ -212,6 +229,12 @@ async function startListening() {
   }
   errorEl.textContent = '';
 
+  // BUG 7: Check if mic select has no options
+  if (micSelect.options.length === 0) {
+    errorEl.textContent = 'No microphone available. Please connect a microphone and reload.';
+    return;
+  }
+
   // Acquire mic ONCE and keep it alive
   try {
     activeStream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: micSelect.value } } });
@@ -237,8 +260,10 @@ function stopListening() {
 }
 
 function restartRecognition() {
+  // BUG 6: Don't restart if already starting
+  if (recognitionStarting) return;
   if (recognition) recognition.abort();
-  setTimeout(() => { if (listening) startRecognition(); }, 200);
+  setTimeout(() => { if (listening && !recognitionStarting) startRecognition(); }, 200);
 }
 
 let interimSpan = null;
@@ -247,6 +272,10 @@ let interimTranslateTimer = null;
 let lastInterimText = '';
 
 function startRecognition() {
+  // BUG 6: Guard against double start
+  if (recognitionStarting) return;
+  recognitionStarting = true;
+
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   recognition = new SR();
   recognition.continuous = true;
@@ -260,17 +289,29 @@ function startRecognition() {
       if (r.isFinal) {
         const text = r[0].transcript.trim();
         if (text.length < 2) continue;
+
+        // BUG 3: Increment generation to invalidate in-flight interim translates
+        interimGeneration++;
+
         // Clear interim spans
         if (interimSpan) { interimSpan.remove(); interimSpan = null; }
         if (interimTransSpan) { interimTransSpan.remove(); interimTransSpan = null; }
         if (interimTranslateTimer) { clearTimeout(interimTranslateTimer); interimTranslateTimer = null; }
         lastInterimText = '';
-        // Add final result
-        originalEl.textContent += text + '\n';
+
+        // BUG 5: Push to finalized lines and rebuild text content
+        finalOriginalLines.push(text);
+        originalEl.textContent = finalOriginalLines.join('\n') + '\n';
         originalEl.scrollTop = originalEl.scrollHeight;
+
         try {
           const tr = await translate(text);
-          if (tr) { translatedEl.textContent += tr + '\n'; translatedEl.scrollTop = translatedEl.scrollHeight; addToHistory(text, tr); }
+          if (tr) {
+            finalTranslatedLines.push(tr);
+            translatedEl.textContent = finalTranslatedLines.join('\n') + '\n';
+            translatedEl.scrollTop = translatedEl.scrollHeight;
+            addToHistory(text, tr);
+          }
         } catch (e) { errorEl.textContent = 'Translation error: ' + e.message; }
       } else { interim += r[0].transcript; }
     }
@@ -279,13 +320,19 @@ function startRecognition() {
       if (!interimSpan) { interimSpan = document.createElement('span'); interimSpan.className = 'interim'; originalEl.appendChild(interimSpan); }
       interimSpan.textContent = interim;
       originalEl.scrollTop = originalEl.scrollHeight;
-      // Translate interim with debounce (every 500ms)
+      // Translate interim with debounce (every 800ms)
       if (interim !== lastInterimText) {
         lastInterimText = interim;
         if (interimTranslateTimer) clearTimeout(interimTranslateTimer);
+
+        // BUG 3: Capture current generation before async call
+        const gen = interimGeneration;
+
         interimTranslateTimer = setTimeout(async () => {
           try {
             const tr = await translate(interim);
+            // BUG 3: Only write to DOM if generation hasn't changed
+            if (gen !== interimGeneration) return;
             if (tr && interimTransSpan) {
               interimTransSpan.textContent = tr;
               translatedEl.scrollTop = translatedEl.scrollHeight;
@@ -316,12 +363,15 @@ function startRecognition() {
 
   // Auto-restart WITHOUT releasing activeStream
   recognition.onend = () => {
-    if (listening) setTimeout(() => { if (listening) startRecognition(); }, 100);
+    // BUG 6: Don't schedule restart if already starting
+    if (listening && !recognitionStarting) setTimeout(() => { if (listening && !recognitionStarting) startRecognition(); }, 100);
   };
 
   recognition.start();
+  // BUG 6: Clear the starting flag after start() succeeds
+  recognitionStarting = false;
 
-  // Force flush every 8 seconds to avoid long waits
+  // Force flush every 5 seconds to avoid long waits
   if (flushTimer) clearInterval(flushTimer);
   flushTimer = setInterval(() => {
     if (listening && recognition) {
@@ -331,23 +381,66 @@ function startRecognition() {
 }
 
 // ---- Translation ----
+// BUG 2: Robust translate with error handling
 async function translate(text) {
-  const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${getSourceCode()}&tl=${getTargetCode()}&dt=t&q=${encodeURIComponent(text)}`;
-  const res = await fetch(url);
-  const data = await res.json();
-  return data[0].map(s => s[0]).join('');
+  try {
+    const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${getSourceCode()}&tl=${getTargetCode()}&dt=t&q=${encodeURIComponent(text)}`;
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data || !data[0] || !Array.isArray(data[0])) return null;
+    return data[0].map(s => s[0]).join('');
+  } catch(e) {
+    return null;
+  }
 }
 
 // ---- History ----
+// BUG 1: Use DOM API instead of innerHTML to prevent XSS
 function addToHistory(original, translated) {
   const time = new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
   const item = document.createElement('div');
   item.className = 'history-item';
-  item.innerHTML = `<div class="history-time">${time}<span class="history-mode">${getSourceName()} → ${getTargetName()}</span></div><div class="history-original">${original}</div><div class="history-translated">${translated}</div>`;
+
+  const timeDiv = document.createElement('div');
+  timeDiv.className = 'history-time';
+  timeDiv.textContent = time;
+
+  const modeSpan = document.createElement('span');
+  modeSpan.className = 'history-mode';
+  modeSpan.textContent = getSourceName() + ' \u2192 ' + getTargetName();
+  timeDiv.appendChild(modeSpan);
+
+  const origDiv = document.createElement('div');
+  origDiv.className = 'history-original';
+  origDiv.textContent = original;
+
+  const transDiv = document.createElement('div');
+  transDiv.className = 'history-translated';
+  transDiv.textContent = translated;
+
+  item.appendChild(timeDiv);
+  item.appendChild(origDiv);
+  item.appendChild(transDiv);
+
   historyList.insertBefore(item, historyList.firstChild);
+
+  // BUG 4: Cap history to 100 items
+  while (historyList.children.length > 100) {
+    historyList.removeChild(historyList.lastChild);
+  }
 }
 function clearHistory() { historyList.innerHTML = ''; }
-function clearText() { originalEl.textContent = ''; translatedEl.textContent = ''; errorEl.textContent = ''; }
+function clearText() {
+  finalOriginalLines = [];
+  finalTranslatedLines = [];
+  originalEl.textContent = '';
+  translatedEl.textContent = '';
+  errorEl.textContent = '';
+  interimSpan = null;
+  interimTransSpan = null;
+}
 
 // ---- Typing translator ----
 const typingInput = document.getElementById('typingInput');
@@ -363,13 +456,17 @@ typingInput.addEventListener('input', () => {
     try {
       // Auto-detect: use Google Translate with sl=auto
       const res = await fetch(`https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=en&dt=t&q=${encodeURIComponent(text)}`);
+      if (!res.ok) { typingResult.textContent = 'Error'; return; }
       const data = await res.json();
+      if (!data || !data[0] || !Array.isArray(data[0])) { typingResult.textContent = 'Error'; return; }
       const detectedLang = data[2]; // detected source language
       let translated;
       if (detectedLang === 'en') {
         // English detected -> translate to Spanish
         const res2 = await fetch(`https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=es&dt=t&q=${encodeURIComponent(text)}`);
+        if (!res2.ok) { typingResult.textContent = 'Error'; return; }
         const data2 = await res2.json();
+        if (!data2 || !data2[0] || !Array.isArray(data2[0])) { typingResult.textContent = 'Error'; return; }
         translated = data2[0].map(s => s[0]).join('');
         typingLang.textContent = 'EN → ES';
       } else {
