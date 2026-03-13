@@ -15,67 +15,109 @@
     align-items: center;
     min-height: 100vh;
   }
-  .container {
-    text-align: center;
+  .container { text-align: center; }
+  .user-bar {
+    position: fixed; top: 0; right: 0; padding: 12px 20px;
+    display: flex; align-items: center; gap: 12px; font-size: 13px;
   }
-  h1 {
-    color: #e94560;
-    font-size: 36px;
-    margin-bottom: 40px;
+  .user-email { color: #a8a8a8; }
+  .usage-badge {
+    background: #16213e; border: 1px solid #2a2a4a; border-radius: 20px;
+    padding: 4px 12px; font-size: 11px; color: #a8a8a8;
   }
-  .links {
-    display: flex;
-    gap: 30px;
-    justify-content: center;
+  .usage-badge .minutes { color: #e94560; font-weight: bold; }
+  .plan-badge {
+    background: #28a745; color: #fff; border-radius: 20px;
+    padding: 4px 10px; font-size: 10px; font-weight: bold; text-transform: uppercase;
   }
-  a {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    width: 280px;
-    height: 180px;
-    border-radius: 12px;
-    text-decoration: none;
-    color: #fff;
-    font-weight: bold;
-    transition: all 0.2s;
+  .plan-badge.free { background: #555; }
+  .logout-btn {
+    background: none; border: 1px solid #333; color: #666; padding: 4px 12px;
+    border-radius: 4px; cursor: pointer; font-size: 12px;
   }
-  a:hover { transform: scale(1.05); }
-  .mic-link {
-    background: #0f3460;
-    border: 2px solid #1a4a80;
+  .logout-btn:hover { color: #e94560; border-color: #e94560; }
+  h1 { color: #e94560; font-size: 36px; margin-bottom: 40px; }
+  .links { display: flex; gap: 30px; justify-content: center; }
+  a.card {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    width: 280px; height: 180px; border-radius: 12px; text-decoration: none;
+    color: #fff; font-weight: bold; transition: all 0.2s;
   }
+  a.card:hover { transform: scale(1.05); }
+  .mic-link { background: #0f3460; border: 2px solid #1a4a80; }
   .mic-link:hover { background: #153d6f; }
-  .system-link {
-    background: #533483;
-    border: 2px solid #6a45a0;
-  }
+  .system-link { background: #533483; border: 2px solid #6a45a0; }
   .system-link:hover { background: #5f3d94; }
   .link-icon { font-size: 48px; margin-bottom: 10px; }
   .link-title { font-size: 20px; margin-bottom: 6px; }
   .link-desc { font-size: 13px; color: #a8a8a8; font-weight: normal; }
+  .loading { color: #555; font-size: 14px; }
   @media (max-width: 768px) {
     .links { flex-direction: column; align-items: center; }
-    a { width: 90%; height: 140px; }
+    a.card { width: 90%; height: 140px; }
+    .user-bar { padding: 8px 12px; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
   }
 </style>
 </head>
 <body>
+<div class="user-bar" id="userBar" style="display:none">
+  <span class="user-email" id="userEmail"></span>
+  <span class="usage-badge"><span class="minutes" id="usageMinutes">0</span> / <span id="totalMinutes">60</span> min</span>
+  <span class="plan-badge free" id="planBadge">FREE</span>
+  <button class="logout-btn" onclick="handleLogout()">Logout</button>
+</div>
 <div class="container">
-  <h1>Audio Translator</h1>
-  <div class="links">
-    <a href="mic.html" target="_blank" class="mic-link">
-      <div class="link-icon">🎤</div>
-      <div class="link-title">My Voice</div>
-      <div class="link-desc">What I say → Translate</div>
-    </a>
-    <a href="system.html" target="_blank" class="system-link">
-      <div class="link-icon">🔊</div>
-      <div class="link-title">System Audio</div>
-      <div class="link-desc">What I hear → Translate</div>
-    </a>
+  <div class="loading" id="loading">Loading...</div>
+  <div id="content" style="display:none">
+    <h1>Audio Translator</h1>
+    <div class="links">
+      <a href="mic.html" class="card mic-link">
+        <div class="link-icon">🎤</div>
+        <div class="link-title">My Voice</div>
+        <div class="link-desc">What I say → Translate</div>
+      </a>
+      <a href="system.html" class="card system-link">
+        <div class="link-icon">🔊</div>
+        <div class="link-title">System Audio</div>
+        <div class="link-desc">What I hear → Translate</div>
+      </a>
+    </div>
   </div>
 </div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="supabase-config.js"></script>
+<script>
+async function init() {
+  const user = await getUser();
+  if (!user) {
+    window.location.href = 'auth.html';
+    return;
+  }
+
+  document.getElementById('userEmail').textContent = user.email;
+
+  const profile = await getProfile(user.id);
+  if (profile) {
+    const used = Math.round(profile.monthly_minutes_used || 0);
+    const plan = profile.plan || 'free';
+    document.getElementById('usageMinutes').textContent = used;
+    document.getElementById('totalMinutes').textContent = plan === 'pro' ? '∞' : FREE_MONTHLY_MINUTES;
+    const badge = document.getElementById('planBadge');
+    badge.textContent = plan.toUpperCase();
+    badge.className = 'plan-badge ' + plan;
+  }
+
+  document.getElementById('loading').style.display = 'none';
+  document.getElementById('content').style.display = 'block';
+  document.getElementById('userBar').style.display = 'flex';
+}
+
+async function handleLogout() {
+  await signOut();
+}
+
+init();
+</script>
 </body>
 </html>

@@ -9,8 +9,19 @@
   body { background: #1a1a2e; color: #fff; font-family: Helvetica, Arial, sans-serif; display: flex; min-height: 100vh; }
   .main { flex: 1; display: flex; justify-content: center; align-items: center; padding: 20px; }
   .container { width: 660px; }
+  .top-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
   .back { color: #555; text-decoration: none; font-size: 13px; }
   .back:hover { color: #e94560; }
+  .user-info { display: flex; align-items: center; gap: 8px; font-size: 11px; }
+  .usage-pill {
+    background: #16213e; border: 1px solid #2a2a4a; border-radius: 20px;
+    padding: 3px 10px; color: #a8a8a8;
+  }
+  .usage-pill .used { color: #e94560; font-weight: bold; }
+  .usage-pill.capped { border-color: #e94560; }
+  .usage-pill.capped .used { color: #ff4444; }
+  .logout-link { color: #555; cursor: pointer; text-decoration: underline; }
+  .logout-link:hover { color: #e94560; }
   h1 { text-align: center; color: #e94560; font-size: 28px; margin-bottom: 4px; }
   .subtitle { text-align: center; color: #533483; font-size: 13px; margin-bottom: 14px; }
   .device-row { margin-bottom: 14px; }
@@ -38,6 +49,7 @@
   .swap-btn:hover { background: #3a3a5a; transform: scale(1.1); }
   .start-btn { display: block; width: 100%; padding: 18px; font-size: 22px; font-weight: bold; border: none; border-radius: 8px; cursor: pointer; color: #fff; background: #e94560; margin-bottom: 12px; transition: background 0.2s; }
   .start-btn.listening { background: #28a745; }
+  .start-btn:disabled { background: #555; cursor: not-allowed; }
   .status-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; font-size: 13px; color: #a8a8a8; }
   .text-label { font-size: 12px; color: #a8a8a8; margin-bottom: 4px; }
   .text-box { width: 100%; min-height: 100px; max-height: 200px; overflow-y: auto; padding: 12px; border-radius: 6px; font-size: 15px; line-height: 1.5; margin-bottom: 10px; white-space: pre-wrap; word-wrap: break-word; }
@@ -47,6 +59,7 @@
   .clear-btn:hover { background: #555; }
   .interim { color: #888; }
   .error { color: #e94560; text-align: center; margin: 10px 0; font-size: 13px; }
+  .cap-warning { background: #3a1a1a; border: 1px solid #e94560; border-radius: 6px; padding: 10px; text-align: center; font-size: 13px; color: #e94560; margin-bottom: 12px; display: none; }
   .typing-section { margin-top: 16px; border-top: 1px solid #2a2a4a; padding-top: 14px; }
   .typing-label { font-size: 11px; color: #a8a8a8; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }
   .typing-input {
@@ -87,9 +100,19 @@
 <body>
 <div class="main">
   <div class="container">
-    <a href="index.html" class="back">&larr; Back</a>
+    <div class="top-bar">
+      <a href="index.html" class="back">&larr; Back</a>
+      <div class="user-info">
+        <span class="usage-pill" id="usagePill"><span class="used" id="usageUsed">0</span> / <span id="usageTotal">60</span> min</span>
+        <span class="logout-link" onclick="handleLogout()">logout</span>
+      </div>
+    </div>
     <h1>🔊 System Audio</h1>
     <div class="subtitle">Translates what you hear (select BlackHole)</div>
+
+    <div class="cap-warning" id="capWarning">
+      You've used all your free minutes this month. <a href="#" style="color:#fff;text-decoration:underline">Upgrade to Pro</a> for unlimited.
+    </div>
 
     <div class="device-row">
       <div class="device-label">Audio Input</div>
@@ -140,21 +163,22 @@
   <div class="history-list" id="historyList"></div>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="supabase-config.js"></script>
 <script>
+let currentUser = null;
+let currentProfile = null;
 let listening = false;
 let recognition = null;
 let activeStream = null;
 let flushTimer = null;
-
-// BUG 6: Double startRecognition guard
 let recognitionStarting = false;
-
-// BUG 3: Generation counter for race condition
 let interimGeneration = 0;
-
-// BUG 5: Finalized lines arrays
 let finalOriginalLines = [];
 let finalTranslatedLines = [];
+let usageTimer = null;
+let sessionSeconds = 0;
+let isCapped = false;
 
 const startBtn = document.getElementById('startBtn');
 const statusEl = document.getElementById('status');
@@ -166,6 +190,53 @@ const sourceLangEl = document.getElementById('sourceLang');
 const targetLangEl = document.getElementById('targetLang');
 const micSelect = document.getElementById('micSelect');
 
+// ---- Auth init ----
+async function init() {
+  currentUser = await requireAuth();
+  if (!currentUser) return;
+  currentProfile = await getProfile(currentUser.id);
+  updateUsageDisplay();
+  checkCap();
+  loadDevices();
+  loadSavedHistory();
+  updateStatus();
+}
+
+function updateUsageDisplay() {
+  if (!currentProfile) return;
+  const used = Math.round(currentProfile.monthly_minutes_used || 0);
+  const plan = currentProfile.plan || 'free';
+  document.getElementById('usageUsed').textContent = used;
+  document.getElementById('usageTotal').textContent = plan === 'pro' ? '∞' : FREE_MONTHLY_MINUTES;
+  const pill = document.getElementById('usagePill');
+  if (plan === 'free' && used >= FREE_MONTHLY_MINUTES) {
+    pill.classList.add('capped');
+  } else {
+    pill.classList.remove('capped');
+  }
+}
+
+function checkCap() {
+  if (!currentProfile) return;
+  if (currentProfile.plan === 'free' && (currentProfile.monthly_minutes_used || 0) >= FREE_MONTHLY_MINUTES) {
+    isCapped = true;
+    document.getElementById('capWarning').style.display = 'block';
+    startBtn.disabled = true;
+    startBtn.textContent = 'LIMIT REACHED';
+  }
+}
+
+async function handleLogout() { await signOut(); }
+
+// ---- Load saved history from Supabase ----
+async function loadSavedHistory() {
+  if (!currentUser) return;
+  const history = await loadHistory(currentUser.id, 50);
+  history.reverse().forEach(item => {
+    addToHistoryDOM(item.source_text, item.translated_text, item.source_lang, item.target_lang, new Date(item.created_at));
+  });
+}
+
 // ---- Device enumeration ----
 async function loadDevices() {
   try {
@@ -176,7 +247,6 @@ async function loadDevices() {
   const inputs = devices.filter(d => d.kind === 'audioinput');
   micSelect.innerHTML = '';
 
-  // BUG 7: If no inputs found, show error
   if (inputs.length === 0) {
     errorEl.textContent = 'No audio input found. Please connect an audio input and reload.';
     return;
@@ -234,18 +304,17 @@ function updateStatus() {
 function toggleListening() { listening ? stopListening() : startListening(); }
 
 async function startListening() {
+  if (isCapped) return;
   if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
     errorEl.textContent = 'Web Speech API not supported. Use Chrome.'; return;
   }
   errorEl.textContent = '';
 
-  // BUG 7: Check if mic select has no options
   if (micSelect.options.length === 0) {
     errorEl.textContent = 'No audio input available. Please connect an audio input and reload.';
     return;
   }
 
-  // Acquire mic ONCE and keep it alive
   try {
     activeStream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: micSelect.value } } });
   } catch(e) {
@@ -257,6 +326,7 @@ async function startListening() {
   startBtn.classList.add('listening');
   updateStatus();
   startRecognition();
+  startUsageTracking();
 }
 
 function stopListening() {
@@ -267,10 +337,43 @@ function stopListening() {
   startBtn.textContent = 'START';
   startBtn.classList.remove('listening');
   updateStatus();
+  stopUsageTracking();
+}
+
+// ---- Usage tracking ----
+function startUsageTracking() {
+  sessionSeconds = 0;
+  usageTimer = setInterval(async () => {
+    sessionSeconds += 30;
+    if (currentUser) {
+      const result = await trackUsage(currentUser.id, 30, 'system');
+      if (result) {
+        currentProfile.monthly_minutes_used = result.monthly_minutes_used;
+        updateUsageDisplay();
+        if (result.capped) {
+          isCapped = true;
+          document.getElementById('capWarning').style.display = 'block';
+          stopListening();
+          startBtn.disabled = true;
+          startBtn.textContent = 'LIMIT REACHED';
+        }
+      }
+    }
+  }, 30000);
+}
+
+function stopUsageTracking() {
+  if (usageTimer) { clearInterval(usageTimer); usageTimer = null; }
+  if (currentUser && sessionSeconds > 0) {
+    const remaining = sessionSeconds % 30;
+    if (remaining > 0) {
+      trackUsage(currentUser.id, remaining, 'system');
+    }
+  }
+  sessionSeconds = 0;
 }
 
 function restartRecognition() {
-  // BUG 6: Don't restart if already starting
   if (recognitionStarting) return;
   if (recognition) recognition.abort();
   setTimeout(() => { if (listening && !recognitionStarting) startRecognition(); }, 200);
@@ -282,7 +385,6 @@ let interimTranslateTimer = null;
 let lastInterimText = '';
 
 function startRecognition() {
-  // BUG 6: Guard against double start
   if (recognitionStarting) return;
   recognitionStarting = true;
 
@@ -300,16 +402,13 @@ function startRecognition() {
         const text = r[0].transcript.trim();
         if (text.length < 2) continue;
 
-        // BUG 3: Increment generation to invalidate in-flight interim translates
         interimGeneration++;
 
-        // Clear interim spans
         if (interimSpan) { interimSpan.remove(); interimSpan = null; }
         if (interimTransSpan) { interimTransSpan.remove(); interimTransSpan = null; }
         if (interimTranslateTimer) { clearTimeout(interimTranslateTimer); interimTranslateTimer = null; }
         lastInterimText = '';
 
-        // BUG 5: Push to finalized lines and rebuild text content
         finalOriginalLines.push(text);
         originalEl.textContent = finalOriginalLines.join('\n') + '\n';
         originalEl.scrollTop = originalEl.scrollHeight;
@@ -326,22 +425,16 @@ function startRecognition() {
       } else { interim += r[0].transcript; }
     }
     if (interim) {
-      // Show interim original
       if (!interimSpan) { interimSpan = document.createElement('span'); interimSpan.className = 'interim'; originalEl.appendChild(interimSpan); }
       interimSpan.textContent = interim;
       originalEl.scrollTop = originalEl.scrollHeight;
-      // Translate interim with debounce (every 800ms)
       if (interim !== lastInterimText) {
         lastInterimText = interim;
         if (interimTranslateTimer) clearTimeout(interimTranslateTimer);
-
-        // BUG 3: Capture current generation before async call
         const gen = interimGeneration;
-
         interimTranslateTimer = setTimeout(async () => {
           try {
             const tr = await translate(interim);
-            // BUG 3: Only write to DOM if generation hasn't changed
             if (gen !== interimGeneration) return;
             if (tr && interimTransSpan) {
               interimTransSpan.textContent = tr;
@@ -356,7 +449,6 @@ function startRecognition() {
           } catch(e) {}
         }, 800);
       }
-      // Show placeholder if no interim translation yet
       if (!interimTransSpan) {
         interimTransSpan = document.createElement('span');
         interimTransSpan.className = 'interim';
@@ -371,17 +463,13 @@ function startRecognition() {
     errorEl.textContent = 'Speech error: ' + event.error;
   };
 
-  // Auto-restart WITHOUT releasing activeStream
   recognition.onend = () => {
-    // BUG 6: Don't schedule restart if already starting
     if (listening && !recognitionStarting) setTimeout(() => { if (listening && !recognitionStarting) startRecognition(); }, 100);
   };
 
   recognition.start();
-  // BUG 6: Clear the starting flag after start() succeeds
   recognitionStarting = false;
 
-  // Force flush every 5 seconds to avoid long waits
   if (flushTimer) clearInterval(flushTimer);
   flushTimer = setInterval(() => {
     if (listening && recognition) {
@@ -391,7 +479,6 @@ function startRecognition() {
 }
 
 // ---- Translation ----
-// BUG 2: Robust translate with error handling
 async function translate(text) {
   try {
     const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${getSourceCode()}&tl=${getTargetCode()}&dt=t&q=${encodeURIComponent(text)}`;
@@ -406,9 +493,15 @@ async function translate(text) {
 }
 
 // ---- History ----
-// BUG 1: Use DOM API instead of innerHTML to prevent XSS
 function addToHistory(original, translated) {
-  const time = new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  addToHistoryDOM(original, translated, getSourceCode(), getTargetCode(), new Date());
+  if (currentUser) {
+    saveToHistory(currentUser.id, original, translated, getSourceCode(), getTargetCode(), 'system');
+  }
+}
+
+function addToHistoryDOM(original, translated, srcLang, tgtLang, date) {
+  const time = date.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
   const item = document.createElement('div');
   item.className = 'history-item';
@@ -419,7 +512,7 @@ function addToHistory(original, translated) {
 
   const modeSpan = document.createElement('span');
   modeSpan.className = 'history-mode';
-  modeSpan.textContent = getSourceName() + ' \u2192 ' + getTargetName();
+  modeSpan.textContent = (srcLang || '?') + ' → ' + (tgtLang || '?');
   timeDiv.appendChild(modeSpan);
 
   const origDiv = document.createElement('div');
@@ -436,11 +529,11 @@ function addToHistory(original, translated) {
 
   historyList.insertBefore(item, historyList.firstChild);
 
-  // BUG 4: Cap history to 100 items
   while (historyList.children.length > 100) {
     historyList.removeChild(historyList.lastChild);
   }
 }
+
 function clearHistory() { historyList.innerHTML = ''; }
 function clearText() {
   finalOriginalLines = [];
@@ -464,15 +557,13 @@ typingInput.addEventListener('input', () => {
   if (!text) { typingResult.textContent = ''; typingLang.textContent = ''; return; }
   typingTimer = setTimeout(async () => {
     try {
-      // Auto-detect: use Google Translate with sl=auto
       const res = await fetch(`https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=en&dt=t&q=${encodeURIComponent(text)}`);
       if (!res.ok) { typingResult.textContent = 'Error'; return; }
       const data = await res.json();
       if (!data || !data[0] || !Array.isArray(data[0])) { typingResult.textContent = 'Error'; return; }
-      const detectedLang = data[2]; // detected source language
+      const detectedLang = data[2];
       let translated;
       if (detectedLang === 'en') {
-        // English detected -> translate to Spanish
         const res2 = await fetch(`https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=es&dt=t&q=${encodeURIComponent(text)}`);
         if (!res2.ok) { typingResult.textContent = 'Error'; return; }
         const data2 = await res2.json();
@@ -480,7 +571,6 @@ typingInput.addEventListener('input', () => {
         translated = data2[0].map(s => s[0]).join('');
         typingLang.textContent = 'EN → ES';
       } else {
-        // Other language -> translate to English
         translated = data[0].map(s => s[0]).join('');
         const langName = detectedLang === 'es' ? 'ES' : detectedLang.toUpperCase();
         typingLang.textContent = `${langName} → EN`;
@@ -490,8 +580,7 @@ typingInput.addEventListener('input', () => {
   }, 400);
 });
 
-loadDevices();
-updateStatus();
+init();
 </script>
 </body>
 </html>

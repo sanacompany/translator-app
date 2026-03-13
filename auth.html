@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sign In - Audio Translator</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #1a1a2e;
+    color: #fff;
+    font-family: Helvetica, Arial, sans-serif;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+  }
+  .auth-container {
+    width: 380px;
+    padding: 40px 30px;
+    background: #12122a;
+    border-radius: 12px;
+    border: 1px solid #2a2a4a;
+  }
+  h1 { text-align: center; color: #e94560; font-size: 28px; margin-bottom: 6px; }
+  .tagline { text-align: center; color: #666; font-size: 13px; margin-bottom: 30px; }
+  .tabs { display: flex; gap: 0; margin-bottom: 24px; }
+  .tab {
+    flex: 1; padding: 10px; text-align: center; cursor: pointer;
+    background: #1a1a2e; border: 1px solid #2a2a4a; color: #666;
+    font-size: 14px; font-weight: bold; transition: all 0.2s;
+  }
+  .tab:first-child { border-radius: 6px 0 0 6px; }
+  .tab:last-child { border-radius: 0 6px 6px 0; }
+  .tab.active { background: #e94560; color: #fff; border-color: #e94560; }
+  .form-group { margin-bottom: 16px; }
+  .form-label { display: block; font-size: 11px; color: #a8a8a8; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }
+  .form-input {
+    width: 100%; background: #16213e; color: #fff; border: 2px solid #2a2a4a; border-radius: 6px;
+    padding: 12px 14px; font-size: 15px; outline: none; font-family: inherit;
+  }
+  .form-input:focus { border-color: #e94560; }
+  .form-input::placeholder { color: #555; }
+  .submit-btn {
+    display: block; width: 100%; padding: 14px; font-size: 16px; font-weight: bold;
+    border: none; border-radius: 8px; cursor: pointer; color: #fff;
+    background: #e94560; margin-top: 20px; transition: background 0.2s;
+  }
+  .submit-btn:hover { background: #d13a55; }
+  .submit-btn:disabled { background: #555; cursor: not-allowed; }
+  .error { color: #e94560; text-align: center; margin-top: 12px; font-size: 13px; }
+  .success { color: #28a745; text-align: center; margin-top: 12px; font-size: 13px; }
+  .divider { text-align: center; color: #555; font-size: 12px; margin: 20px 0; }
+  .google-btn {
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+    width: 100%; padding: 12px; font-size: 14px; font-weight: bold;
+    border: 2px solid #2a2a4a; border-radius: 8px; cursor: pointer;
+    color: #fff; background: #16213e; transition: all 0.2s;
+  }
+  .google-btn:hover { border-color: #e94560; background: #1a2a4e; }
+  .free-badge {
+    text-align: center; margin-top: 20px; padding: 10px; background: #1a1a2e;
+    border-radius: 6px; font-size: 12px; color: #666;
+  }
+  .free-badge strong { color: #e94560; }
+</style>
+</head>
+<body>
+<div class="auth-container">
+  <h1>Audio Translator</h1>
+  <div class="tagline">Real-time translation for calls & conversations</div>
+
+  <div class="tabs">
+    <div class="tab active" onclick="showTab('login')">Sign In</div>
+    <div class="tab" onclick="showTab('signup')">Sign Up</div>
+  </div>
+
+  <form id="authForm" onsubmit="handleSubmit(event)">
+    <div class="form-group">
+      <label class="form-label">Email</label>
+      <input class="form-input" type="email" id="email" placeholder="you@email.com" required>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Password</label>
+      <input class="form-input" type="password" id="password" placeholder="Min 6 characters" required minlength="6">
+    </div>
+    <button class="submit-btn" type="submit" id="submitBtn">Sign In</button>
+  </form>
+
+  <div class="error" id="error"></div>
+  <div class="success" id="success"></div>
+
+  <div class="free-badge">
+    <strong>60 free minutes/month</strong> included. No credit card required.
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="supabase-config.js"></script>
+<script>
+let mode = 'login';
+
+async function init() {
+  const user = await getUser();
+  if (user) window.location.href = 'index.html';
+}
+
+function showTab(tab) {
+  mode = tab;
+  document.querySelectorAll('.tab').forEach((t, i) => {
+    t.classList.toggle('active', (i === 0 && tab === 'login') || (i === 1 && tab === 'signup'));
+  });
+  document.getElementById('submitBtn').textContent = tab === 'login' ? 'Sign In' : 'Create Account';
+  document.getElementById('error').textContent = '';
+  document.getElementById('success').textContent = '';
+}
+
+async function handleSubmit(e) {
+  e.preventDefault();
+  const email = document.getElementById('email').value;
+  const password = document.getElementById('password').value;
+  const errorEl = document.getElementById('error');
+  const successEl = document.getElementById('success');
+  const btn = document.getElementById('submitBtn');
+
+  errorEl.textContent = '';
+  successEl.textContent = '';
+  btn.disabled = true;
+  btn.textContent = mode === 'login' ? 'Signing in...' : 'Creating account...';
+
+  try {
+    if (mode === 'signup') {
+      const { data, error } = await supabase.auth.signUp({ email, password });
+      if (error) throw error;
+      if (data.user && !data.user.email_confirmed_at) {
+        successEl.textContent = 'Check your email for a confirmation link!';
+      } else {
+        window.location.href = 'index.html';
+      }
+    } else {
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) throw error;
+      window.location.href = 'index.html';
+    }
+  } catch (err) {
+    errorEl.textContent = err.message;
+  }
+
+  btn.disabled = false;
+  btn.textContent = mode === 'login' ? 'Sign In' : 'Create Account';
+}
+
+init();
+</script>
+</body>
+</html>
