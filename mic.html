@@ -72,6 +72,16 @@
   .history-mode { font-size: 9px; color: #533483; font-weight: bold; margin-left: 6px; }
   .history-original { font-size: 13px; color: #ccc; margin-bottom: 3px; }
   .history-translated { font-size: 13px; color: #e94560; font-weight: bold; }
+  @media (max-width: 768px) {
+    body { flex-direction: column; }
+    .main { padding: 10px; }
+    .container { width: 100%; }
+    .sidebar { width: 100%; height: auto; max-height: 300px; position: static; border-left: none; border-top: 1px solid #2a2a4a; }
+    .lang-select { min-width: 120px; font-size: 14px; padding: 8px 10px; }
+    .lang-row { gap: 8px; }
+    h1 { font-size: 22px; }
+    .start-btn { padding: 14px; font-size: 18px; }
+  }
 </style>
 </head>
 <body>
