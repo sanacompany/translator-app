@@ -1,6 +1,6 @@
 // Supabase configuration - shared across all pages
 const SUPABASE_URL = 'https://bbtxfovxbqcjmyazmfhx.supabase.co';
-const SUPABASE_ANON_KEY = 'sb_publishable_Ral_btz1s0EWfDpy6EeKJA_guVjMngC';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJidHhmb3Z4YnFjam15YXptZmh4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM0MjQ3MzcsImV4cCI6MjA4OTAwMDczN30.bPYNBtfUcNPU5-XqzFryPmHd4W7LBb8aKMHGEcBI_YA';
 
 const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
