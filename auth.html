@@ -130,7 +130,7 @@ async function handleSubmit(e) {
 
   try {
     if (mode === 'signup') {
-      const { data, error } = await supabase.auth.signUp({ email, password });
+      const { data, error } = await sb.auth.signUp({ email, password });
       if (error) throw error;
       if (data.user && !data.user.email_confirmed_at) {
         successEl.textContent = 'Check your email for a confirmation link!';
@@ -138,7 +138,7 @@ async function handleSubmit(e) {
         window.location.href = 'index.html';
       }
     } else {
-      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+      const { data, error } = await sb.auth.signInWithPassword({ email, password });
       if (error) throw error;
       window.location.href = 'index.html';
     }
